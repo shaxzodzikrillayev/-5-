@@ -3,11 +3,28 @@ import { api, setCsrfToken } from '../lib/api.js';
 
 const AuthContext = createContext(null);
 
+/** true, если сервер без постоянной БД (типично для Vercel без DATABASE_URL). */
+let backendIsEphemeral = false;
+
+async function detectEphemeralBackend() {
+  if (backendIsEphemeral) return true;
+  try {
+    const health = await api.get('/health');
+    backendIsEphemeral = health?.persistent === false;
+  } catch {
+    /* health недоступен — считаем, что всё в порядке */
+  }
+  return backendIsEphemeral;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const mounted = useRef(true);
+  const hadUser = useRef(false);
+  // Объявлен до refresh, чтобы объяснить пропажу сессии (нужен актуальный текст).
+  const explainSessionLossRef = useRef(async () => 'Сессия истекла. Войдите снова.');
 
   useEffect(() => {
     mounted.current = true;
@@ -21,6 +38,15 @@ export function AuthProvider({ children }) {
       const data = await api.get('/auth/me');
       if (!mounted.current) return null;
       setCsrfToken(data?.csrfToken);
+      // Сессия пропала «на ходу»: на Vercel без постоянной БД это ожидаемо,
+      // поэтому сообщаем причину, а просто молча выкидываем пользователя.
+      if (!data?.user && hadUser.current && data?.authenticated === false) {
+        hadUser.current = false;
+        setUser(null);
+        setError(await explainSessionLossRef.current());
+        return null;
+      }
+      hadUser.current = Boolean(data?.user);
       setUser(data?.user || null);
       setError(null);
       return data?.user || null;
@@ -59,18 +85,32 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  /**
+   * Вход/регистрация возвращают пользователя, но сессия может не закрепиться:
+   *  - на Vercel без DATABASE_URL запрос попадает в контейнер с другой БД;
+   *  - без SESSION_SECRET после холодного старта подпись cookie не совпадает.
+   * В обоих случаях показываем точную причину вместо «неправильный пароль».
+   */
+  const explainSessionLoss = useCallback(async () => {
+    if (await detectEphemeralBackend()) {
+      return 'Сессия не сохранилась: сервер работает без постоянной базы данных (Vercel без DATABASE_URL), '
+        + 'и следующий запрос попал в другой контейнер. Задайте DATABASE_URL (PostgreSQL) в переменных окружения.';
+    }
+    return 'Сессия не сохранилась: на сервере не задан SESSION_SECRET — задайте его в переменных окружения Vercel.';
+  }, []);
+
+  explainSessionLossRef.current = explainSessionLoss;
+
   const login = useCallback(
     async (credentials) => {
       const user = applyAuth(await api.post('/auth/login', credentials));
       if (user && !(await verifySession())) {
         setUser(null);
-        throw new Error(
-          'Вход выполнен, но сессия не сохранилась. На сервере не задан SESSION_SECRET — задайте переменную окружения на Vercel.',
-        );
+        throw new Error(await explainSessionLoss());
       }
       return user;
     },
-    [applyAuth, verifySession],
+    [applyAuth, verifySession, explainSessionLoss],
   );
 
   const register = useCallback(
@@ -78,13 +118,11 @@ export function AuthProvider({ children }) {
       const user = applyAuth(await api.post('/auth/register', payload));
       if (user && !(await verifySession())) {
         setUser(null);
-        throw new Error(
-          'Регистрация выполнена, но сессия не сохранилась. На сервере не задан SESSION_SECRET — задайте переменную окружения на Vercel.',
-        );
+        throw new Error(await explainSessionLoss());
       }
       return user;
     },
-    [applyAuth, verifySession],
+    [applyAuth, verifySession, explainSessionLoss],
   );
 
   const logout = useCallback(async () => {

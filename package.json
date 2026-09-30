@@ -15,6 +15,7 @@
     "db:seed": "node server/db/seed.js",
     "db:reset": "node server/db/migrate.js --force && node server/db/seed.js",
     "db:clear": "node server/db/migrate.js --force",
+    "db:purge-users": "node scripts/purge-users.js",
     "build": "vite build",
     "start": "cross-env NODE_ENV=production node server/index.js",
     "preview": "npm run build && npm start",

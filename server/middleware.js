@@ -121,6 +121,10 @@ function isDatabaseError(error) {
     text.includes('database') ||
     text.includes('db_') ||
     text.includes('econnrefused') ||
+    text.includes('enotfound') ||
+    text.includes('etimedout') ||
+    text.includes('econnreset') ||
+    text.includes('certificate') ||
     text.includes('no such table') ||
     text.includes('unable to open database')
   );

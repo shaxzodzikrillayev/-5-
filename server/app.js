@@ -54,6 +54,10 @@ export async function createApp() {
   app.disable('x-powered-by');
   app.set('trust proxy', true);
 
+  for (const warning of configWarnings()) {
+    console.warn(`[config] ВНИМАНИЕ: ${warning}`);
+  }
+
   app.use(express.json({ limit: '256kb' }));
   app.use(express.urlencoded({ extended: false, limit: '256kb' }));
   app.use(cookieParser());
@@ -108,13 +112,36 @@ export async function createApp() {
   api.use('/settings', settingsRoutes);
   api.use('/users', userRoutes);
 
+  /**
+   * Предупреждения о конфигурации: показываются в /api/health и в логах,
+   * чтобы проблема «аккаунт зарегистрировался, а потом 401» была понятна сразу.
+   */
+  function configWarnings() {
+    const list = [];
+    if (!config.databaseUrl && config.isServerless) {
+      list.push(
+        'DATABASE_URL не задан: используется SQLite в /tmp, который удаляется вместе с контейнером. '
+          + 'Аккаунты и дежурства не сохраняются между запросами к разным экземплярам — задайте DATABASE_URL (PostgreSQL).',
+      );
+    }
+    if (!config.hasEnvSessionSecret) {
+      list.push(
+        'SESSION_SECRET не задан: после каждого холодного старта все сессии сбрасываются. '
+          + 'Задайте SESSION_SECRET в переменных окружения.',
+      );
+    }
+    return list;
+  }
+
   api.get('/health', (req, res) => {
     res.json({
       ok: true,
       service: 'dezhurstvo-api',
       time: new Date().toISOString(),
       database: config.databaseUrl ? 'postgres' : config.isServerless ? 'sqlite (/tmp)' : 'sqlite',
+      persistent: Boolean(config.databaseUrl) || !config.isServerless,
       sessionSecret: config.hasEnvSessionSecret ? 'env' : 'ephemeral',
+      warnings: configWarnings(),
     });
   });
 

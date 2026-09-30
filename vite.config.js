@@ -18,6 +18,15 @@ export default defineConfig({
             if (!proxyReq.getHeader('origin')) return;
             proxyReq.setHeader('x-forwarded-host', proxyReq.getHeader('host') || 'localhost:5173');
           });
+          // Без этого обработчика Vite отдаёт пустой 500, когда API не запущен.
+          proxy.on('error', (err, _req, res) => {
+            const message = `API недоступен (${err.code || err.message}). Запустите сервер: npm run dev:server`;
+            console.error(`[proxy] ${message}`);
+            if (!res.headersSent && typeof res.writeHead === 'function') {
+              res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ error: message }));
+            }
+          });
         },
       },
     },

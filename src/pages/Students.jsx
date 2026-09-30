@@ -6,7 +6,7 @@ import { useToast } from '../components/Toast.jsx';
 import { Modal, ConfirmDialog } from '../components/Modal.jsx';
 import { Alert, Avatar, EmptyState, Loading, ProgressBar, StatCard } from '../components/ui.jsx';
 import { percent, studentsWord, todayISO } from '../lib/format.js';
-import { IconUsers, IconPlus, IconSearch, IconEdit, IconTrash, IconKey } from '../components/icons.jsx';
+import { IconUsers, IconPlus, IconSearch, IconEdit, IconTrash, IconArchive, IconKey } from '../components/icons.jsx';
 
 const SORT_OPTIONS = [
   { value: 'order', label: 'По порядку в классе' },
@@ -30,6 +30,7 @@ export default function Students() {
   const [editTarget, setEditTarget] = useState(null);
   const [archiveTarget, setArchiveTarget] = useState(null);
   const [restoreTarget, setRestoreTarget] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [linkTarget, setLinkTarget] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -78,9 +79,29 @@ export default function Students() {
     if (!archiveTarget) return;
     setBusy(true);
     try {
-      await api.del(`/students/${archiveTarget.id}`, { confirm: true });
+      await api.post(`/students/${archiveTarget.id}/archive`, { confirm: true });
       toast.success(`${archiveTarget.fullName} архивирован, история сохранена`);
       setArchiveTarget(null);
+      load();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!deleteTarget) return;
+    setBusy(true);
+    try {
+      const res = await api.del(`/students/${deleteTarget.id}`, { confirm: true, permanent: true });
+      const n = res?.removed?.duties ?? 0;
+      toast.success(
+        n > 0
+          ? `${deleteTarget.fullName} удалён вместе с дежурствами (${n})`
+          : `${deleteTarget.fullName} удалён`,
+      );
+      setDeleteTarget(null);
       load();
     } catch (err) {
       toast.error(err.message);
@@ -190,17 +211,25 @@ export default function Students() {
                           <IconKey size={14} />
                         </button>
                       ) : null}
-                      {s.isActive ? (
-                        isKurator ? (
-                          <button type="button" className="btn btn-sm btn-secondary btn-icon" style={{ color: 'var(--bad)' }} onClick={() => setArchiveTarget(s)} title="Архивировать">
-                            <IconTrash size={14} />
-                          </button>
-                        ) : null
-                      ) : (
+                      {s.isActive && isKurator ? (
+                        <button type="button" className="btn btn-sm btn-secondary btn-icon" onClick={() => setArchiveTarget(s)} title="Архивировать (история сохранится)">
+                          <IconArchive size={14} />
+                        </button>
+                      ) : null}
+                      {!s.isActive ? (
                         <button type="button" className="btn btn-sm btn-secondary btn-icon" onClick={() => setRestoreTarget(s)} title="Восстановить">
                           <IconUsers size={14} />
                         </button>
-                      )}
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary btn-icon"
+                        style={{ color: 'var(--bad)' }}
+                        onClick={() => setDeleteTarget(s)}
+                        title="Удалить безвозвратно"
+                      >
+                        <IconTrash size={14} />
+                      </button>
                     </div>
                   ) : null}
                 </div>
@@ -289,7 +318,78 @@ export default function Students() {
         onConfirm={() => restore(restoreTarget)}
         onCancel={() => setRestoreTarget(null)}
       />
+
+      <DeleteStudentDialog
+        student={deleteTarget}
+        busy={busy}
+        onConfirm={remove}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </>
+  );
+}
+
+function DeleteStudentDialog({ student, busy, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState('');
+
+  useEffect(() => {
+    setTyped('');
+  }, [student]);
+
+  if (!student) return null;
+
+  const expected = `${student.lastName} ${student.firstName}`;
+  const matches = typed.trim().toLowerCase() === expected.toLowerCase();
+
+  return (
+    <Modal
+      open
+      title="Удалить ученика навсегда?"
+      subtitle={student.fullName}
+      onClose={busy ? undefined : onCancel}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>
+            Отмена
+          </button>
+          <button type="button" className="btn btn-danger" onClick={onConfirm} disabled={busy || !matches}>
+            {busy ? <span className="spinner spinner-light" /> : null}
+            Удалить безвозвратно
+          </button>
+        </>
+      }
+    >
+      <div className="alert alert-error">
+        <span aria-hidden="true">⚠️</span>
+        <div>
+          Будут удалены карточка ученика, его аккаунт, все дежурства ({student.stats?.assigned ?? 0}), отметки
+          и замены. Действие необратимо — восстановить ученика будет невозможно.
+        </div>
+      </div>
+      {student.userId ? (
+        <div className="alert alert-info">
+          <span aria-hidden="true">ℹ️</span>
+          <div>Ученик потеряет доступ к системе, активные сессии будут завершены.</div>
+        </div>
+      ) : null}
+      <div className="field" style={{ marginBottom: 0 }}>
+        <label htmlFor="del-confirm">
+          Введите «{expected}» для подтверждения <span className="req">*</span>
+        </label>
+        <input
+          id="del-confirm"
+          className="input"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && matches && !busy) onConfirm();
+          }}
+          placeholder={expected}
+          autoComplete="off"
+          disabled={busy}
+        />
+      </div>
+    </Modal>
   );
 }
 

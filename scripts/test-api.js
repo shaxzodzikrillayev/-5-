@@ -240,20 +240,43 @@ async function main() {
   r = await starosta.patch(`/students/${createdStudentId}`, { firstName: 'Обновлён', lastName: 'Учеников' });
   check('PATCH /api/students/:id (староста) -> 200', r.status === 200 && r.json?.student?.firstName === 'Обновлён', JSON.stringify(r.json).slice(0, 200));
 
-  r = await student.del(`/students/${createdStudentId}`, { confirm: true });
+  r = await student.del(`/students/${createdStudentId}`, { confirm: true, permanent: true });
   check('Ученик не может удалить ученика -> 403', r.status === 403, `status=${r.status}`);
 
   r = await starosta.del(`/students/${createdStudentId}`, { confirm: true });
-  check('Удаление без роли куратора -> 403', r.status === 403, `status=${r.status}`);
+  check('Удаление без permanent -> 400', r.status === 400, `status=${r.status}`);
+
+  r = await kurator.del(`/students/${createdStudentId}`, { confirm: true });
+  check('Удаление без permanent (куратор) -> 400', r.status === 400, `status=${r.status}`);
 
   r = await kurator.del(`/students/${createdStudentId}`, {});
   check('Удаление без подтверждения -> 400', r.status === 400, `status=${r.status}`);
 
-  r = await kurator.del(`/students/${createdStudentId}`, { confirm: true });
-  check('DELETE /api/students/:id (куратор, confirm) -> 200', r.status === 200 && r.json?.ok === true, JSON.stringify(r.json));
+  r = await kurator.post(`/students/${createdStudentId}/archive`, {});
+  check('Архивирование без подтверждения -> 400', r.status === 400, `status=${r.status}`);
+
+  r = await starosta.post(`/students/${createdStudentId}/archive`, { confirm: true });
+  check('Архивирование без роли куратора -> 403', r.status === 403, `status=${r.status}`);
+
+  r = await kurator.post(`/students/${createdStudentId}/archive`, { confirm: true });
+  check('POST /api/students/:id/archive (куратор) -> 200', r.status === 200 && r.json?.ok === true, JSON.stringify(r.json));
 
   r = await kurator.post(`/students/${createdStudentId}/restore`, {});
   check('POST /api/students/:id/restore -> 200', r.status === 200, JSON.stringify(r.json).slice(0, 120));
+
+  r = await starosta.del(`/students/${createdStudentId}`, { confirm: true, permanent: true });
+  check('DELETE /api/students/:id (староста) -> 200', r.status === 200 && r.json?.ok === true, JSON.stringify(r.json));
+  check(
+    'Удаление безвозвратно: карточка исчезла',
+    (await starosta.get(`/students/${createdStudentId}`)).status === 404,
+  );
+  check(
+    'Аккаунт удалённого ученика не может войти',
+    (await new Client('del-user').post('/auth/login', { email: newStudentEmail, password: 'secret123' })).status === 401,
+  );
+
+  r = await kurator.del(`/students/${createdStudentId}`, { confirm: true, permanent: true });
+  check('Повторное удаление -> 404', r.status === 404, `status=${r.status}`);
 
   section('7. Дежурства');
   const dutyDate = todayISO(1);

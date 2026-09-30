@@ -7,6 +7,7 @@ import { logAudit } from '../lib/audit.js';
 import { str, badRequest, notFound, forbidden } from '../lib/errors.js';
 import { requireAuth, requireManager, requireKurator } from '../middleware.js';
 import { isDateString } from '../lib/dates.js';
+import { ROLES } from '../lib/constants.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -238,14 +239,15 @@ router.patch('/:id', requireManager, async (req, res, next) => {
   }
 });
 
-/** DELETE /api/students/:id — мягкое удаление (требуется подтверждение). */
-router.delete('/:id', requireKurator, async (req, res, next) => {
+/** POST /api/students/:id/archive — архивирование с сохранением истории (куратор). */
+router.post('/:id/archive', requireKurator, async (req, res, next) => {
   try {
     if (req.body?.confirm !== true && req.query.confirm !== 'true') {
-      throw badRequest('Удаление требует подтверждения (confirm: true)');
+      throw badRequest('Архивирование требует подтверждения (confirm: true)');
     }
     const student = await db.get('SELECT * FROM students WHERE id = ?', [req.params.id]);
     if (!student) throw notFound('Ученик не найден');
+    if (!student.is_active) throw badRequest('Ученик уже архивирован');
 
     const dutiesCount = await db.get('SELECT COUNT(*) AS n FROM duties WHERE student_id = ?', [student.id]);
     const historyKept = Number(dutiesCount?.n || 0) > 0;
@@ -266,6 +268,80 @@ router.delete('/:id', requireKurator, async (req, res, next) => {
     });
 
     res.json({ ok: true, historyKept });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/students/:id — безвозвратное удаление ученика.
+ *
+ * Доступно старосте и куратору. Удаляет карточку, аккаунт, сессии и все
+ * связанные записи (дежурства, отметки, замены). Запись в журнал аудита
+ * сохраняется — она фиксирует сам факт удаления.
+ */
+router.delete('/:id', requireManager, async (req, res, next) => {
+  try {
+    const confirmed = req.body?.confirm === true || req.query.confirm === 'true';
+    if (!confirmed || req.body?.permanent !== true) {
+      throw badRequest('Безвозвратное удаление требует confirm: true и permanent: true');
+    }
+    const student = await db.get('SELECT * FROM students WHERE id = ?', [req.params.id]);
+    if (!student) throw notFound('Ученик не найден');
+    if (student.user_id === req.user.id) throw forbidden('Нельзя удалить собственный аккаунт');
+
+    const user = student.user_id
+      ? await db.get('SELECT id, role FROM users WHERE id = ?', [student.user_id])
+      : null;
+    if (user && user.role !== ROLES.STUDENT) {
+      throw forbidden('Карточка привязана к account с ролью старосты/куратора — удалите его в разделе пользователей');
+    }
+
+    const [dutiesCount, recordsCount, replacementsCount] = await Promise.all([
+      db.get('SELECT COUNT(*) AS n FROM duties WHERE student_id = ?', [student.id]),
+      db.get('SELECT COUNT(*) AS n FROM duty_records WHERE student_id = ?', [student.id]),
+      db.get(
+        'SELECT COUNT(*) AS n FROM replacements WHERE original_student_id = ? OR replacement_student_id = ?',
+        [student.id, student.id],
+      ),
+    ]);
+
+    const removed = {
+      duties: Number(dutiesCount?.n || 0),
+      records: Number(recordsCount?.n || 0),
+      replacements: Number(replacementsCount?.n || 0),
+      account: Boolean(user),
+    };
+
+    await db.transaction(async () => {
+      await db.run('DELETE FROM duty_records WHERE student_id = ?', [student.id]);
+      await db.run(
+        'DELETE FROM replacements WHERE original_student_id = ? OR replacement_student_id = ?',
+        [student.id, student.id],
+      );
+      await db.run('DELETE FROM duties WHERE student_id = ?', [student.id]);
+      if (user) {
+        await db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
+        await db.run('UPDATE users SET student_id = NULL, updated_at = ? WHERE id = ?', [nowIso(), user.id]);
+        await db.run('DELETE FROM users WHERE id = ?', [user.id]);
+      }
+      await db.run('DELETE FROM students WHERE id = ?', [student.id]);
+    });
+
+    await logAudit(req, 'student.deleted', {
+      entityType: 'student',
+      entityId: student.id,
+      summary: `Ученик удалён безвозвратно: ${student.first_name} ${student.last_name} (дежурств: ${removed.duties}, записей: ${removed.records}, замен: ${removed.replacements})`,
+      before: {
+        firstName: student.first_name,
+        lastName: student.last_name,
+        className: student.class_name,
+        isActive: Boolean(student.is_active),
+      },
+      after: { deleted: true, ...removed },
+    });
+
+    res.json({ ok: true, removed });
   } catch (error) {
     next(error);
   }

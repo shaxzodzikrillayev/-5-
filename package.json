@@ -1,0 +1,37 @@
+{
+  "name": "dezhurstvo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Система управления дежурством класса",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite",
+    "db:migrate": "node server/db/migrate.js",
+    "db:seed": "node server/db/seed.js",
+    "db:reset": "node server/db/migrate.js --force && node server/db/seed.js",
+    "db:clear": "node server/db/migrate.js --force",
+    "build": "vite build",
+    "start": "cross-env NODE_ENV=production node server/index.js",
+    "preview": "npm run build && npm start",
+    "test:api": "node scripts/test-api.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "vite": "^5.4.11"
+  }
+}

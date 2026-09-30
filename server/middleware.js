@@ -113,14 +113,32 @@ function safeOrigin(value) {
   }
 }
 
+/** Ошибки доступа к БД — это проблема окружения, а не запроса. */
+function isDatabaseError(error) {
+  const text = `${error.code || ''} ${error.message || ''}`.toLowerCase();
+  return (
+    text.includes('sql') ||
+    text.includes('database') ||
+    text.includes('db_') ||
+    text.includes('econnrefused') ||
+    text.includes('no such table') ||
+    text.includes('unable to open database')
+  );
+}
+
 /** Единый обработчик ошибок. */
 export function errorHandler(error, req, res, next) { // eslint-disable-line no-unused-vars
-  const status = error.status && Number.isInteger(error.status) ? error.status : 500;
+  let status = error.status && Number.isInteger(error.status) ? error.status : 500;
+  if (status >= 500 && isDatabaseError(error)) status = 503;
   if (status >= 500) {
     console.error(`[api] ${req.method} ${req.originalUrl} -> ${status}`, error);
   }
+  const messages = {
+    500: 'Внутренняя ошибка сервера',
+    503: 'База данных недоступна. Проверьте DATABASE_URL или файл базы данных.',
+  };
   const body = {
-    error: status >= 500 ? 'Внутренняя ошибка сервера' : error.message || 'Ошибка запроса',
+    error: status < 500 ? error.message || 'Ошибка запроса' : messages[status] || messages[500],
     code: error.code || undefined,
   };
   if (error.details) body.details = error.details;

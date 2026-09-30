@@ -66,8 +66,9 @@ npm run test:api     # 108 проверок API по всем ролям
 | `PORT` | `5000` | порт backend |
 | `NODE_ENV` | `development` | режим приложения |
 | `DATABASE_URL` | — | PostgreSQL; если пусто — используется SQLite |
-| `DATABASE_FILE` | `./data/dezhurstvo.db` | файл SQLite |
+| `DATABASE_FILE` | `./data/dezhurstvo.db` (`/tmp/dezhurstvo.db` на Vercel) | файл SQLite |
 | `SESSION_SECRET` | — | **обязателен в production** (≥32 символа) |
+| `SEED_ON_EMPTY` | `true` на Vercel без `DATABASE_URL`, иначе `false` | заполнить пустую БД демо-данными при старте |
 | `APP_TIMEZONE` | `Asia/Tashkent` | часовой пояс приложения |
 | `CODE_STAROSTA` | `STAR-2026` | код для роли староста при регистрации |
 | `CODE_KURATOR` | `ADMIN-2026` | код для роли куратора при регистрации |
@@ -78,11 +79,24 @@ npm run test:api     # 108 проверок API по всем ролям
 ## Развёртывание на Vercel
 
 1. Подключите репозиторий в Vercel (фреймворк определяется автоматически, `vercel.json` уже настроен).
-2. Задайте переменные окружения: `DATABASE_URL` (PostgreSQL — Neon/Supabase/Vercel Postgres),
-   `SESSION_SECRET`, `NODE_ENV=production`.
+2. Задайте переменные окружения: `SESSION_SECRET` (обязательно, например `openssl rand -hex 32`),
+`NODE_ENV=production`. По желанию — `DATABASE_URL` для PostgreSQL.
 3. Команда сборки `npm run build`, вывод `dist/client`, API — serverless-функция `api/index.js`.
 
-Важно: SQLite на Vercel не подходит (файловая система эфемерна) — используйте PostgreSQL.
+Постоянное хранилище (чтобы данные не терялись между перезапусками) — задайте
+`DATABASE_URL` (Neon/Supabase/Vercel Postgres) и `SEED_ON_EMPTY=false`.
+
+Как это работает без PostgreSQL: файловая система контейнера Vercel доступна только для чтения,
+поэтому SQLite автоматически создаётся в `/tmp/dezhurstvo.db`. Схема применяется при «холодном
+старте», а если база пустая — загружаются демо-данные с детерминированными id, поэтому любой
+контейнер получает одинаковые данные. Сессия хранится в httpOnly-cookie, подписанной HMAC
+(`SESSION_SECRET`), поэтому логин не «слетает», когда запрос попадает в другой контейнер.
+
+Проверка serverless-режима локально (вызов функции так же, как на Vercel):
+
+```
+node scripts/simulate-vercel.mjs --vercel-env
+```
 Миграции выполняются автоматически при первом запросе к serverless-функции.
 
 ## Структура

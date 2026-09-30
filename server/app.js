@@ -4,6 +4,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import { config, ROOT_DIR } from './config.js';
 import { runMigrations } from './db/migrate.js';
+import { db } from './db/index.js';
 import { purgeExpiredSessions } from './lib/auth.js';
 import {
   attachUser,
@@ -23,9 +24,28 @@ import auditRoutes from './routes/auditLogs.js';
 import settingsRoutes from './routes/settings.js';
 import userRoutes from './routes/users.js';
 
+/**
+ * В serverless каждый «холодный старт» — это новый контейнер, поэтому схема
+ * (и, если разрешено, демо-данные) должны подниматься автоматически.
+ */
+async function seedIfEmpty() {
+  if (!config.seedOnEmpty) return;
+  try {
+    const row = await db.get('SELECT COUNT(*) AS c FROM users');
+    if (Number(row?.c || 0) > 0) return;
+    const { seed } = await import('./db/seed.js');
+    await seed({ quiet: true });
+    console.log('[db] база была пуста — загружены демо-данные');
+  } catch (error) {
+    // Демо-данные не критичны: лучше подняться с пустой БД, чем падать.
+    console.error('[db] не удалось загрузить демо-данные:', error.message);
+  }
+}
+
 export async function createApp() {
   await runMigrations();
-  await purgeExpiredSessions();
+  await purgeExpiredSessions().catch(() => {});
+  await seedIfEmpty();
   setInterval(() => {
     purgeExpiredSessions().catch(() => {});
   }, 60 * 60 * 1000).unref?.();

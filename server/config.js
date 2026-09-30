@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -39,26 +40,57 @@ const isProd = process.env.NODE_ENV === 'production';
 
 let sessionSecret = process.env.SESSION_SECRET || '';
 if (!sessionSecret) {
-  if (isProd) {
-    console.error(
-      '[config] SESSION_SECRET обязателен в production. Сгенерируйте: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"',
-    );
-    process.exit(1);
-  }
+  // Раньше здесь был process.exit(1): на Vercel без переменной окружения это давало
+  // 500 на каждый запрос. Теперь приложение поднимается, но предупреждает loudly.
   sessionSecret = crypto.randomBytes(48).toString('hex');
-  console.warn('[config] SESSION_SECRET не задан — используется временный секрет (сессии сбросятся при перезапуске).');
+  console.warn(
+    isProd
+      ? '[config] ВНИМАНИЕ: SESSION_SECRET не задан. Сессии сбросятся при смене контейнера. Задайте SESSION_SECRET в переменных окружения.'
+      : '[config] SESSION_SECRET не задан — используется временный секрет (сессии сбросятся при перезапуске).',
+  );
 }
 
 const dataDir = path.resolve(ROOT_DIR, 'data');
-const sqliteFile = path.resolve(ROOT_DIR, process.env.DATABASE_FILE || './data/dezhurstvo.db');
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
+
+// В serverless-окружении файловая система доступна только для чтения (кроме каталога
+// temp), поэтому SQLite обязан лежать во временной папке — иначе ЛЮБОЙ запрос к БД
+// падает с «unable to open database file».
+const tmpDir = path.resolve(os.tmpdir());
+const serverlessSqliteFile = path.join(tmpDir, 'dezhurstvo.db');
+const defaultSqliteFile = isServerless ? serverlessSqliteFile : './data/dezhurstvo.db';
+
+function resolveSqliteFile() {
+  const resolved = path.resolve(ROOT_DIR, process.env.DATABASE_FILE || defaultSqliteFile);
+  if (isServerless && !process.env.DATABASE_URL && !resolved.startsWith(tmpDir)) {
+    console.warn(
+      `[config] файловая система serverless доступна только для чтения: ${resolved} → используется ${serverlessSqliteFile}`,
+    );
+    return serverlessSqliteFile;
+  }
+  return resolved;
+}
+
+const sqliteFile = resolveSqliteFile();
 
 export const config = {
   isProd,
+  isServerless,
   port: Number(process.env.PORT || 5000),
   sessionSecret,
   databaseUrl: (process.env.DATABASE_URL || '').trim(),
   sqliteFile,
   dataDir,
+  /**
+   * Заполнять ли БД демо-данными при пустой базе.
+   * По умолчанию — только в serverless без PostgreSQL, чтобы опубликованный
+   * проект сразу выглядел рабочим. Локально остаётся пустая система.
+   */
+  seedOnEmpty:
+    String(
+      process.env.SEED_ON_EMPTY ??
+        (process.env.VERCEL && !process.env.DATABASE_URL ? 'true' : 'false'),
+    ) !== 'false',
   timezone: process.env.APP_TIMEZONE || 'Asia/Tashkent',
   codes: {
     starosta: (process.env.CODE_STAROSTA || 'STAROSTA').trim(),
@@ -78,7 +110,12 @@ export const config = {
 };
 
 export function ensureDataDir() {
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  // В serverless-режиме каталог проекта может быть read-only — это не ошибка.
+  try {
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  } catch (error) {
+    if (!config.isServerless) throw error;
+  }
 }
 
 export { isProd };

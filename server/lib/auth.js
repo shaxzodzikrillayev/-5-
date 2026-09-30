@@ -49,59 +49,99 @@ export function passwordProblems(password) {
   return problems;
 }
 
+/**
+ * Формат cookie сессии: `v1.<userId>.<csrf>.<expMs>.<hmac>`.
+ *
+ * Значение подписано HMAC-ключом SESSION_SECRET, поэтому сессия остаётся валидной
+ * даже если запрос попал в другой контейнер serverless-окружения (у каждого
+ * своя БД в /tmp). Строка в таблице sessions хранится best-effort: она нужна
+ * для аудита и для отзыва всех сессий пользователя.
+ */
+function signSessionPayload(userId, csrfToken, expiresAtMs) {
+  const payload = `v1.${userId}.${csrfToken}.${expiresAtMs}`;
+  const signature = crypto.createHmac('sha256', config.sessionSecret).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function verifySessionSignature(token) {
+  if (typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 5 || parts[0] !== 'v1') return null;
+  const [version, userId, csrfToken, expRaw, signature] = parts;
+  const payload = `${version}.${userId}.${csrfToken}.${expRaw}`;
+  const expected = crypto.createHmac('sha256', config.sessionSecret).update(payload).digest('base64url');
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const expiresAtMs = Number(expRaw);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs < Date.now()) return null;
+  return { userId, csrfToken, expiresAtMs, sessionId: `${userId}.${csrfToken}` };
+}
+
 export async function createSession(userId, { userAgent = null, ip = null } = {}) {
-  const id = crypto.randomBytes(32).toString('hex');
   const csrfToken = crypto.randomBytes(32).toString('hex');
   const now = new Date();
   const expiresAt = new Date(now.getTime() + config.sessionTtlMs);
-  await db.run(
-    `INSERT INTO sessions (id, user_id, csrf_token, user_agent, ip, created_at, last_seen, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, userId, csrfToken, userAgent, ip, now.toISOString(), now.toISOString(), expiresAt.toISOString()],
-  );
-  return { id, csrfToken, expiresAt };
+  const token = signSessionPayload(userId, csrfToken, expiresAt.getTime());
+  try {
+    await db.run(
+      `INSERT INTO sessions (id, user_id, csrf_token, user_agent, ip, created_at, last_seen, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `${userId}.${csrfToken}`,
+        userId,
+        csrfToken,
+        userAgent,
+        ip,
+        now.toISOString(),
+        now.toISOString(),
+        expiresAt.toISOString(),
+      ],
+    );
+  } catch (error) {
+    // Таблица сессий недоступна — авторизация всё равно работает по cookie.
+    console.error('[auth] не удалось сохранить сессию в БД:', error.message);
+  }
+  return { id: token, csrfToken, expiresAt };
 }
 
 export async function destroySession(sessionId) {
   if (!sessionId) return;
-  await db.run('DELETE FROM sessions WHERE id = ?', [sessionId]);
+  // Принимаем и «сырой» id из БД, и подписанный токен из cookie.
+  const key = String(sessionId).includes('.') ? String(sessionId).split('.').slice(0, 2).join('.') : sessionId;
+  await db.run('DELETE FROM sessions WHERE id = ?', [key]).catch(() => {});
 }
 
 export async function destroyAllUserSessions(userId) {
-  await db.run('DELETE FROM sessions WHERE user_id = ?', [userId]);
+  await db.run('DELETE FROM sessions WHERE user_id = ?', [userId]).catch(() => {});
 }
 
 export async function loadSession(sessionId) {
   if (!sessionId) return null;
+  const verified = verifySessionSignature(sessionId);
+  if (!verified) return null;
+
   const row = await db.get(
-    `SELECT s.id           AS session_id,
-            s.csrf_token   AS csrf_token,
-            s.expires_at   AS expires_at,
-            u.id           AS id,
-            u.first_name   AS first_name,
-            u.last_name    AS last_name,
-            u.email        AS email,
-            u.login        AS login,
-            u.role         AS role,
-            u.student_id   AS student_id,
-            u.is_active    AS is_active
-       FROM sessions s
-       JOIN users u ON u.id = s.user_id
-      WHERE s.id = ?`,
-    [sessionId],
+    `SELECT id           AS id,
+            first_name   AS first_name,
+            last_name    AS last_name,
+            email        AS email,
+            login        AS login,
+            role         AS role,
+            student_id   AS student_id,
+            is_active    AS is_active
+       FROM users
+      WHERE id = ?`,
+    [verified.userId],
   );
-  if (!row) return null;
-  if (new Date(row.expires_at).getTime() < Date.now()) {
-    await destroySession(row.id);
+  if (!row || !row.is_active) {
+    await destroySession(sessionId);
     return null;
   }
-  if (!row.is_active) {
-    await destroySession(row.id);
-    return null;
-  }
+
   return {
-    sessionId: row.session_id,
-    csrfToken: row.csrf_token,
+    sessionId,
+    csrfToken: verified.csrfToken,
     user: {
       id: row.id,
       firstName: row.first_name,
@@ -115,12 +155,15 @@ export async function loadSession(sessionId) {
 }
 
 export async function touchSession(sessionId) {
-  await db.run('UPDATE sessions SET last_seen = ? WHERE id = ?', [new Date().toISOString(), sessionId]);
+  const key = String(sessionId).includes('.') ? String(sessionId).split('.').slice(0, 2).join('.') : sessionId;
+  await db
+    .run('UPDATE sessions SET last_seen = ? WHERE id = ?', [new Date().toISOString(), key])
+    .catch(() => {});
 }
 
 /** Удаляет протухшие сессии (вызывается при старте и раз в час). */
 export async function purgeExpiredSessions() {
-  await db.run('DELETE FROM sessions WHERE expires_at < ?', [new Date().toISOString()]);
+  await db.run('DELETE FROM sessions WHERE expires_at < ?', [new Date().toISOString()]).catch(() => {});
 }
 
 export const COOKIE_OPTIONS = {

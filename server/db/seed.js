@@ -1,5 +1,5 @@
 import { db } from './index.js';
-import { newId, nowIso, runMigrations, getSetting, setSetting } from './migrate.js';
+import { stableId, nowIso, runMigrations, getSetting, setSetting } from './migrate.js';
 import { hashPassword } from '../lib/auth.js';
 import { ROLES } from '../lib/constants.js';
 import { config } from '../config.js';
@@ -49,6 +49,19 @@ const COMMENTS = {
   absent: ['Не пришёл, предупредил', 'Отсутствовал без причины'],
 };
 
+/** Детерминированный ГПСЧ: одинаковые демо-данные в каждом контейнере. */
+function makeRandom(seed = 'dezhurstvo-demo-v1') {
+  let a = 0;
+  for (const ch of seed) a = (a * 31 + ch.charCodeAt(0)) >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const random = makeRandom();
+
 const REASONS = ['Заболел', 'Освобождён', 'Контрольная работа', 'Участник олимпиады', 'Пропуск по семейным обстоятельствам'];
 
 async function existingUsers() {
@@ -86,9 +99,9 @@ export async function seed({ quiet = false } = {}) {
       if (existing.student_id) studentIdByEmail.set(account.email.toLowerCase(), existing.student_id);
       continue;
     }
-    const userId = newId();
+    const userId = stableId(`user:${account.email.toLowerCase()}`);
     const isKurator = account.role === ROLES.KURATOR;
-    const studentId = isKurator ? null : newId();
+    const studentId = isKurator ? null : stableId(`student:${account.email.toLowerCase()}`);
     const hash = await hashPassword(account.password);
 
     await db.run(
@@ -134,23 +147,23 @@ export async function seed({ quiet = false } = {}) {
     for (let k = 0; k < 2; k += 1) {
       const student = students[cursor % students.length];
       cursor += 1;
-      const dutyId = newId();
+      const dutyId = stableId(`duty:${date}:${k}`);
       const isPast = date < today;
       const isToday = date === today;
 
       let status = 'scheduled';
       if (isPast) {
-        const roll = Math.random();
+        const roll = random();
         if (roll < 0.78) status = 'served';
         else if (roll < 0.86) status = 'not_served';
         else if (roll < 0.93) status = 'sick';
         else if (roll < 0.97) status = 'excused';
         else status = 'absent';
       } else if (isToday) {
-        status = Math.random() < 0.5 ? 'served' : 'scheduled';
+        status = random() < 0.5 ? 'served' : 'scheduled';
       }
 
-      const comment = COMMENTS[status] ? COMMENTS[status][Math.floor(Math.random() * COMMENTS[status].length)] : null;
+      const comment = COMMENTS[status] ? COMMENTS[status][Math.floor(random() * COMMENTS[status].length)] : null;
       const createdAt = `${date}T07:${String(10 + k).padStart(2, '0')}:00.000Z`;
 
       await db.run(
@@ -161,13 +174,13 @@ export async function seed({ quiet = false } = {}) {
       await db.run(
         `INSERT INTO duty_records (id, duty_id, student_id, duty_date, status, comment, changed_by, changed_by_role, source, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'schedule', ?)`,
-        [newId(), dutyId, student.id, date, status, comment, starostaUserId, ROLES.STAROSTA, createdAt],
+        [stableId(`rec:${date}:${k}:sched`), dutyId, student.id, date, status, comment, starostaUserId, ROLES.STAROSTA, createdAt],
       );
       if (isPast || isToday) {
         await db.run(
           `INSERT INTO duty_records (id, duty_id, student_id, duty_date, status, comment, changed_by, changed_by_role, source, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)`,
-          [newId(), dutyId, student.id, date, status, comment, starostaUserId, ROLES.STAROSTA, `${date}T13:20:00.000Z`],
+          [stableId(`rec:${date}:${k}:manual`), dutyId, student.id, date, status, comment, starostaUserId, ROLES.STAROSTA, `${date}T13:20:00.000Z`],
         );
       }
       createdDuties += 1;
@@ -182,25 +195,25 @@ export async function seed({ quiet = false } = {}) {
   );
   for (const duty of pastDuties) {
     const candidates = students.filter((s) => s.id !== duty.student_id);
-    const replacement = candidates[Math.floor(Math.random() * candidates.length)];
+    const replacement = candidates[Math.floor(random() * candidates.length)];
     const alreadyBusy = await db.get('SELECT id FROM duties WHERE duty_date = ? AND student_id = ?', [duty.duty_date, replacement.id]);
     if (alreadyBusy) continue;
-    const reason = REASONS[Math.floor(Math.random() * REASONS.length)];
+    const reason = REASONS[Math.floor(random() * REASONS.length)];
     const createdAt = `${duty.duty_date}T09:00:00.000Z`;
 
     await db.run(
       `INSERT INTO replacements (id, duty_id, duty_date, original_student_id, replacement_student_id, reason, created_by, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [newId(), duty.id, duty.duty_date, duty.student_id, replacement.id, reason, starostaUserId, createdAt],
+      [stableId(`repl:${duty.id}`), duty.id, duty.duty_date, duty.student_id, replacement.id, reason, starostaUserId, createdAt],
     );
     await db.run('UPDATE duties SET status = ?, comment = ?, updated_at = ? WHERE id = ?',
       ['replaced', `Замена: ${reason}`, createdAt, duty.id]);
     await db.run(
       `INSERT INTO duty_records (id, duty_id, student_id, duty_date, status, comment, changed_by, changed_by_role, source, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'replacement', ?)`,
-      [newId(), duty.id, duty.student_id, duty.duty_date, 'replaced', `Замена: ${reason}`, starostaUserId, ROLES.STAROSTA, createdAt],
+      [stableId(`rec:${duty.id}:replaced`), duty.id, duty.student_id, duty.duty_date, 'replaced', `Замена: ${reason}`, starostaUserId, ROLES.STAROSTA, createdAt],
     );
-    const newDutyId = newId();
+    const newDutyId = stableId(`duty:repl:${duty.duty_date}:${replacement.id}`);
     await db.run(
       `INSERT INTO duties (id, duty_date, student_id, status, comment, assigned_by, created_at, updated_at)
        VALUES (?, ?, ?, 'served', ?, ?, ?, ?)`,
@@ -209,7 +222,7 @@ export async function seed({ quiet = false } = {}) {
     await db.run(
       `INSERT INTO duty_records (id, duty_id, student_id, duty_date, status, comment, changed_by, changed_by_role, source, created_at)
        VALUES (?, ?, ?, ?, 'served', ?, ?, ?, 'replacement', ?)`,
-      [newId(), newDutyId, replacement.id, duty.duty_date, `Дежурил вместо (замена: ${reason})`,
+      [stableId(`rec:${newDutyId}:extra`), newDutyId, replacement.id, duty.duty_date, `Дежурил вместо (замена: ${reason})`,
         starostaUserId, ROLES.STAROSTA, createdAt],
     );
     replacements += 1;
@@ -231,19 +244,19 @@ export async function seed({ quiet = false } = {}) {
       `INSERT INTO audit_logs (id, actor_id, actor_name, actor_role, action, entity_type, entity_id, summary, before_json, after_json, comment, ip, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        newId(),
+        stableId(`audit:${sample.action}`),
         actorIsKurator ? kuratorUserId : starostaUserId,
         actorIsKurator ? `${KURATOR.firstName} ${KURATOR.lastName}` : `${STAROSTA.firstName} ${STAROSTA.lastName}`,
         actorIsKurator ? ROLES.KURATOR : ROLES.STAROSTA,
         sample.action,
         sample.entityType,
-        newId(),
+        stableId(`audit:entity:${sample.action}`),
         sample.summary,
         sample.before ? JSON.stringify(sample.before) : null,
         sample.after ? JSON.stringify(sample.after) : null,
         null,
         '127.0.0.1',
-        new Date(Date.now() - sample.daysAgo * 86400000 - Math.floor(Math.random() * 8) * 3600000).toISOString(),
+        new Date(Date.now() - sample.daysAgo * 86400000 - Math.floor(random() * 8) * 3600000).toISOString(),
       ],
     );
   }

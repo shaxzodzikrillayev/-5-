@@ -10,6 +10,24 @@ const schemaPath = path.join(here, 'schema.sql');
 
 export const newId = () => crypto.randomUUID();
 
+/**
+ * Детерминированный UUID (v5-подобный) из строки.
+ *
+ * Нужен для демо-данных: каждый «холодный старт» serverless-контейнера создаёт
+ * свою БД, и если id отличаются, то подписанная cookie сессии не найдёт
+ * пользователя в другом контейнере. С одинаковыми id данные идентичны везде.
+ */
+export function stableId(key) {
+  const hash = crypto.createHash('sha1').update(String(key)).digest('hex');
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    `5${hash.slice(13, 16)}`,
+    ((parseInt(hash.slice(16, 17), 16) & 0x3) | 0x8).toString(16) + hash.slice(17, 20),
+    hash.slice(20, 32),
+  ].join('-');
+}
+
 export async function runMigrations({ log = false } = {}) {
   const sql = fs.readFileSync(schemaPath, 'utf8');
   await db.exec(sql);

@@ -1,0 +1,8 @@
+node_modules
+data
+.env
+.env.local
+*.log
+dev.log
+test-server.log
+scripts/simulate-vercel.mjs

@@ -86,14 +86,10 @@ export const config = {
   dataDir,
   /**
    * Заполнять ли БД демо-данными при пустой базе.
-   * По умолчанию — только в serverless без PostgreSQL, чтобы опубликованный
-   * проект сразу выглядел рабочим. Локально остаётся пустая система.
+   * По умолчанию выключено: система стартует пустой, первый зарегистрировавшийся
+   * становится куратором. Включается переменной SEED_ON_EMPTY=true или npm run db:seed.
    */
-  seedOnEmpty:
-    String(
-      process.env.SEED_ON_EMPTY ??
-        (process.env.VERCEL && !process.env.DATABASE_URL ? 'true' : 'false'),
-    ) !== 'false',
+  seedOnEmpty: String(process.env.SEED_ON_EMPTY ?? 'false') !== 'false',
   timezone: process.env.APP_TIMEZONE || 'Asia/Tashkent',
   codes: {
     starosta: (process.env.CODE_STAROSTA || 'STAR-2026').trim(),

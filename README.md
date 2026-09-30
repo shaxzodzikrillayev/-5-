@@ -68,7 +68,7 @@ npm run test:api     # 108 проверок API по всем ролям
 | `DATABASE_URL` | — | PostgreSQL; если пусто — используется SQLite |
 | `DATABASE_FILE` | `./data/dezhurstvo.db` (`/tmp/dezhurstvo.db` на Vercel) | файл SQLite |
 | `SESSION_SECRET` | — | **обязателен в production** (≥32 символа) |
-| `SEED_ON_EMPTY` | `true` на Vercel без `DATABASE_URL`, иначе `false` | заполнить пустую БД демо-данными при старте |
+| `SEED_ON_EMPTY` | `false` | заполнить пустую БД демо-данными при старте |
 | `APP_TIMEZONE` | `Asia/Tashkent` | часовой пояс приложения |
 | `CODE_STAROSTA` | `STAR-2026` | код для роли староста при регистрации |
 | `CODE_KURATOR` | `ADMIN-2026` | код для роли куратора при регистрации |

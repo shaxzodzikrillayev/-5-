@@ -109,7 +109,13 @@ export async function createApp() {
   api.use('/users', userRoutes);
 
   api.get('/health', (req, res) => {
-    res.json({ ok: true, service: 'dezhurstvo-api', time: new Date().toISOString() });
+    res.json({
+      ok: true,
+      service: 'dezhurstvo-api',
+      time: new Date().toISOString(),
+      database: config.databaseUrl ? 'postgres' : config.isServerless ? 'sqlite (/tmp)' : 'sqlite',
+      sessionSecret: config.hasEnvSessionSecret ? 'env' : 'ephemeral',
+    });
   });
 
   app.use('/api', api);

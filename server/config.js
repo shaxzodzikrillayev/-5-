@@ -39,6 +39,7 @@ loadEnvFile();
 const isProd = process.env.NODE_ENV === 'production';
 
 let sessionSecret = process.env.SESSION_SECRET || '';
+const hasEnvSessionSecret = Boolean(process.env.SESSION_SECRET);
 if (!sessionSecret) {
   // Раньше здесь был process.exit(1): на Vercel без переменной окружения это давало
   // 500 на каждый запрос. Теперь приложение поднимается, но предупреждает loudly.
@@ -78,6 +79,8 @@ export const config = {
   isServerless,
   port: Number(process.env.PORT || 5000),
   sessionSecret,
+  /** Задан ли SESSION_SECRET окружением. Если нет — сессии живут только в одном контейнере. */
+  hasEnvSessionSecret,
   databaseUrl: (process.env.DATABASE_URL || '').trim(),
   sqliteFile,
   dataDir,
@@ -93,8 +96,8 @@ export const config = {
     ) !== 'false',
   timezone: process.env.APP_TIMEZONE || 'Asia/Tashkent',
   codes: {
-    starosta: (process.env.CODE_STAROSTA || 'STAROSTA').trim(),
-    kurator: (process.env.CODE_KURATOR || 'KURATOR').trim(),
+    starosta: (process.env.CODE_STAROSTA || 'STAR-2026').trim(),
+    kurator: (process.env.CODE_KURATOR || 'ADMIN-2026').trim(),
   },
   allowFirstKuratorBootstrap: String(process.env.ALLOW_FIRST_KURATOR_BOOTSTRAP ?? 'true') !== 'false',
   cookieName: 'dz_session',

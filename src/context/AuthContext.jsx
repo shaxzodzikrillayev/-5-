@@ -45,14 +45,46 @@ export function AuthProvider({ children }) {
     return data?.user || null;
   }, []);
 
+  /**
+   * После входа/регистрации сразу перепроверяем сессию: если сервер её не видит,
+   * значит cookie не закрепилась (частая причина — незаданный SESSION_SECRET
+   * на Vercel, где каждый контейнер получает свой секрет).
+   */
+  const verifySession = useCallback(async () => {
+    try {
+      const me = await api.get('/auth/me');
+      return Boolean(me?.authenticated && me?.user);
+    } catch {
+      return false;
+    }
+  }, []);
+
   const login = useCallback(
-    async (credentials) => applyAuth(await api.post('/auth/login', credentials)),
-    [applyAuth],
+    async (credentials) => {
+      const user = applyAuth(await api.post('/auth/login', credentials));
+      if (user && !(await verifySession())) {
+        setUser(null);
+        throw new Error(
+          'Вход выполнен, но сессия не сохранилась. На сервере не задан SESSION_SECRET — задайте переменную окружения на Vercel.',
+        );
+      }
+      return user;
+    },
+    [applyAuth, verifySession],
   );
 
   const register = useCallback(
-    async (payload) => applyAuth(await api.post('/auth/register', payload)),
-    [applyAuth],
+    async (payload) => {
+      const user = applyAuth(await api.post('/auth/register', payload));
+      if (user && !(await verifySession())) {
+        setUser(null);
+        throw new Error(
+          'Регистрация выполнена, но сессия не сохранилась. На сервере не задан SESSION_SECRET — задайте переменную окружения на Vercel.',
+        );
+      }
+      return user;
+    },
+    [applyAuth, verifySession],
   );
 
   const logout = useCallback(async () => {

@@ -23,6 +23,8 @@ const ACTION_LABELS = {
   'settings.updated': 'Настройки класса',
   'user.role': 'Смена роли',
   'user.status': 'Статус пользователя',
+  'user.deleted': 'Пользователь удалён',
+  'user.delete_rejected': 'Удаление отклонено',
   'auth.login': 'Вход',
   'auth.register': 'Регистрация',
 };
@@ -33,6 +35,8 @@ const ACTION_COLORS = {
   'replacement.cancelled': '#475569',
   'student.archived': '#dc2626',
   'student.deleted': '#b91c1c',
+  'user.deleted': '#b91c1c',
+  'user.delete_rejected': '#7f1d1d',
   'student.restored': '#16a34a',
   'auth.login': '#64748b',
   'auth.register': '#64748b',

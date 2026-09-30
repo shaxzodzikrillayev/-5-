@@ -460,6 +460,48 @@ async function main() {
 
   r = await kurator.patch(`/users/${r.json?.user?.id}/role`, { role: 'starosta' });
   check('Куратор может повысить ученика до старосты -> 200', r.status === 200 && r.json?.user?.role === 'starosta', JSON.stringify(r.json).slice(0, 150));
+
+  // Регистрируем через отдельный клиент: /auth/register сразу выдаёт сессию новому
+  // пользователю и перезаписал бы cookie клиента куратора.
+  const doomedEmail = `doomed-${uniq}@t.uz`;
+  const registrar = new Client('registrar');
+  r = await registrar.post('/auth/register', {
+    firstName: 'Удаляемый', lastName: 'Староста', email: doomedEmail, password: 'secret123',
+    role: 'starosta', code: 'STAR-2026',
+  });
+  check('Регистрация старосты для проверки удаления -> 201', r.status === 201, JSON.stringify(r.json).slice(0, 150));
+  const doomedUserId = r.json?.user?.id;
+  r = await kurator.post('/auth/login', { email: 'kurator@school.uz', password: 'kurator123' });
+  check('Повторный вход куратора -> 200', r.status === 200, `status=${r.status}`);
+
+  r = await student.del(`/users/${doomedUserId}`, { confirm: true, permanent: true });
+  check('Ученик не может удалить старосту -> 403', r.status === 403, `status=${r.status}`);
+
+  r = await kurator.del(`/users/${doomedUserId}`, { confirm: true });
+  check('Удаление старосты без permanent -> 400', r.status === 400, `status=${r.status}`);
+
+  r = await kurator.del(`/users/${doomedUserId}`, { confirm: true, permanent: true });
+  check('Удаление старосты без кода -> 403', r.status === 403, `status=${r.status}`);
+
+  r = await kurator.del(`/users/${doomedUserId}`, { confirm: true, permanent: true, code: 'неверный' });
+  check('Удаление старосты с неверным кодом -> 403', r.status === 403, `status=${r.status}`);
+
+  r = await kurator.del(`/users/${doomedUserId}`, { confirm: true, permanent: true, code: 'Delate6769' });
+  check('DELETE /api/users/:id (староста + код) -> 200', r.status === 200 && r.json?.ok === true, JSON.stringify(r.json));
+
+  r = await kurator.get('/users?includeInactive=true');
+  check(
+    'Удалённый аккаунт исчез из списка',
+    r.status === 200 && !(r.json?.users || []).some((u) => u.id === doomedUserId),
+    `status=${r.status}`,
+  );
+
+  r = await new Client('doomed-login').post('/auth/login', { email: doomedEmail, password: 'secret123' });
+  check('Удалённый староста больше не может войти -> 401', r.status === 401, `status=${r.status}`);
+
+  const selfId = (await kurator.get('/auth/me')).json?.user?.id;
+  r = await kurator.del(`/users/${selfId}`, { confirm: true, permanent: true, code: 'Delate6769' });
+  check('Нельзя удалить собственный аккаунт -> 400', r.status === 400, `status=${r.status}`);
   await kurator.patch(`/users/${r.json?.user?.id}/role`, { role: 'student' });
 
   section('13. Смена пароля и logout');

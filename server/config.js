@@ -94,6 +94,8 @@ export const config = {
   codes: {
     starosta: (process.env.CODE_STAROSTA || 'STAR-2026').trim(),
     kurator: (process.env.CODE_KURATOR || 'ADMIN-2026').trim(),
+    /** Код для безвозвратного удаления аккаунтов старосты/куратора (DELETE /api/users/:id). */
+    deleteManager: (process.env.CODE_DELETE_MANAGER || 'Delate6769').trim(),
   },
   allowFirstKuratorBootstrap: String(process.env.ALLOW_FIRST_KURATOR_BOOTSTRAP ?? 'true') !== 'false',
   cookieName: 'dz_session',

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useToast } from '../components/Toast.jsx';
+import { Modal } from '../components/Modal.jsx';
 import { Alert, Avatar, EmptyState, Loading, RoleBadge } from '../components/ui.jsx';
 import { formatDateTime, roleMeta } from '../lib/format.js';
-import { IconUsers, IconSettings, IconShield, IconRefresh, IconCheck } from '../components/icons.jsx';
+import { IconUsers, IconSettings, IconShield, IconRefresh, IconCheck, IconTrash } from '../components/icons.jsx';
 
 export default function Settings() {
   const toast = useToast();
@@ -13,6 +14,7 @@ export default function Settings() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [busyUser, setBusyUser] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,6 +53,20 @@ export default function Settings() {
       if (patch.role !== undefined) await api.patch(`/users/${user.id}/role`, { role: patch.role });
       if (patch.isActive !== undefined) await api.patch(`/users/${user.id}/status`, { isActive: patch.isActive });
       toast.success('Пользователь обновлён');
+      load();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusyUser('');
+    }
+  };
+
+  const removeUser = async (user, code) => {
+    setBusyUser(user.id);
+    try {
+      await api.del(`/users/${user.id}`, { confirm: true, permanent: true, code: code || '' });
+      toast.success(`${user.fullName} удалён безвозвратно`);
+      setDeleteTarget(null);
       load();
     } catch (err) {
       toast.error(err.message);
@@ -199,14 +215,26 @@ export default function Settings() {
                   </td>
                   <td style={{ fontSize: '.82rem', color: 'var(--ink-500)' }}>{formatDateTime(u.createdAt)}</td>
                   <td>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${u.isActive ? 'btn-danger-ghost' : 'btn-secondary'}`}
-                      disabled={busyUser === u.id}
-                      onClick={() => updateUser(u, { isActive: !u.isActive })}
-                    >
-                      {u.isActive ? 'Блокировать' : 'Разблокировать'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${u.isActive ? 'btn-danger-ghost' : 'btn-secondary'}`}
+                        disabled={busyUser === u.id}
+                        onClick={() => updateUser(u, { isActive: !u.isActive })}
+                      >
+                        {u.isActive ? 'Блокировать' : 'Разблокировать'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary btn-icon"
+                        style={{ color: 'var(--bad)' }}
+                        title="Удалить безвозвратно"
+                        disabled={busyUser === u.id}
+                        onClick={() => setDeleteTarget(u)}
+                      >
+                        <IconTrash size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -214,6 +242,84 @@ export default function Settings() {
           </table>
         </div>
       </div>
+
+      <DeleteUserDialog
+        user={deleteTarget}
+        busy={busyUser === deleteTarget?.id}
+        onConfirm={(code) => removeUser(deleteTarget, code)}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </>
+  );
+}
+
+function DeleteUserDialog({ user, busy, onConfirm, onCancel }) {
+  const [code, setCode] = useState('');
+  const needsCode = user?.role === 'starosta' || user?.role === 'kurator';
+
+  useEffect(() => {
+    setCode('');
+  }, [user]);
+
+  if (!user) return null;
+
+  const canConfirm = !needsCode || code.trim().length > 0;
+
+  return (
+    <Modal
+      open
+      title="Удалить пользователя навсегда?"
+      subtitle={`${user.fullName} · ${user.email}`}
+      onClose={busy ? undefined : onCancel}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>
+            Отмена
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={() => onConfirm(code)}
+            disabled={busy || !canConfirm}
+          >
+            {busy ? <span className="spinner spinner-light" /> : null}
+            Удалить безвозвратно
+          </button>
+        </>
+      }
+    >
+      <div className="alert alert-error">
+        <span aria-hidden="true">⚠️</span>
+        <div>
+          Аккаунт и все активные сессии будут удалены. Восстановить пользователя будет невозможно —
+          запись в журнале аудита останется.
+        </div>
+      </div>
+      {needsCode ? (
+        <div className="field" style={{ marginBottom: 0 }}>
+          <label htmlFor="del-user-code">
+            Код удаления <span className="req">*</span>
+          </label>
+          <input
+            id="del-user-code"
+            className="input"
+            type="password"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && canConfirm && !busy) onConfirm(code);
+            }}
+            placeholder="Код доступа"
+            autoComplete="off"
+            disabled={busy}
+          />
+          <div className="hint">
+            Роль «{roleMeta(user.role)?.label || user.role}» удаляется только с кодом доступа куратора.
+          </div>
+        </div>
+      ) : (
+        <div className="hint">Для ученика код не требуется.</div>
+      )}
+    </Modal>
   );
 }
